@@ -271,6 +271,29 @@ class IsaacAdapterBase(ABC):
         """Return joint drive configuration: stiffness, damping, limits, target vs actual positions."""
         ...
 
+    @abstractmethod
+    def set_drive_params(
+        self,
+        prim_path: str,
+        joint_name: str,
+        stiffness: Optional[float] = None,
+        damping: Optional[float] = None,
+        max_force: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write a joint drive's gains, in the units ``get_joint_config`` reports.
+
+        ``stiffness`` and ``damping`` arrive per radian for an angular drive and
+        per stage unit for a linear one, and are converted to USD's per-degree
+        storage by ``units.denormalize_gain`` before being authored. Writing the
+        reported value straight onto ``drive:angular:physics:stiffness`` instead
+        makes the drive 57.3x stiffer than asked, silently — that is the whole
+        reason this is a tool and not a note telling callers to do the arithmetic.
+
+        ``max_force`` is a torque on an angular drive and a force on a linear one.
+        Neither carries an angle, so it is written unconverted.
+        """
+        ...
+
     # ── Physics ────────────────────────────────────────────
 
     @abstractmethod

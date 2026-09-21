@@ -43,6 +43,7 @@ def register(registry: Dict[str, Any], adapter: IsaacAdapterBase) -> None:
     registry["simulation.get_logs"] = lambda **p: get_logs(adapter, **p)
     registry["simulation.get_physics_state"] = lambda **p: get_physics_state_handler(adapter, **p)
     registry["simulation.get_joint_config"] = lambda **p: get_joint_config_handler(adapter, **p)
+    registry["simulation.set_drive_params"] = lambda **p: set_drive_params_handler(adapter, **p)
     registry["simulation.reload_script"] = lambda **p: reload_script_handler(adapter, **p)
 
 
@@ -242,6 +243,68 @@ def get_joint_config_handler(adapter: IsaacAdapterBase, prim_path: Optional[str]
             for joint in result.get("joints", []) or []:
                 joint.pop("position_error", None)
         return {"status": "success", **result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def engine_gain_write_warning(adapter: IsaacAdapterBase) -> Optional[str]:
+    """Warn when a gain written to USD will not reach the running solver.
+
+    Newton builds its model once and drive gains are not part of the
+    stage-divergence check, so an authored gain lands on the stage and the
+    running MuJoCo solver keeps the old one. Measured on 6.0.1 Newton, 0/5
+    attempts changed `model.joint_target_ke`: it stayed at 3437746.75 through
+    20 further steps while get_joint_config reported the new value, so the
+    response described a sim that was not running. PhysX picks the write up on
+    the next step (5/5 on both 6.0.1 and 5.1.0).
+
+    The write is still worth performing — it persists on the stage and applies
+    to the next model build — but a caller tuning a gain has to be told why
+    nothing moved.
+    """
+    if adapter.engine != adapter.ENGINE_NEWTON:
+        return None
+    return (
+        "Gain written to USD, but the running Newton solver will not pick it up — its model is built "
+        "once and drive gains are not part of the stage-divergence check. The value persists on the "
+        "stage and applies on the next model build; for gain tuning against a live sim, use the PhysX "
+        "engine (isaac-sim.sh)."
+    )
+
+
+def set_drive_params_handler(
+    adapter: IsaacAdapterBase,
+    prim_path: Optional[str] = None,
+    joint_name: Optional[str] = None,
+    stiffness: Optional[float] = None,
+    damping: Optional[float] = None,
+    max_force: Optional[float] = None,
+) -> Dict[str, Any]:
+    try:
+        if not prim_path:
+            return {"status": "error", "message": "prim_path is required"}
+        if not joint_name:
+            return {"status": "error", "message": "joint_name is required"}
+        if stiffness is None and damping is None and max_force is None:
+            return {
+                "status": "error",
+                "message": "nothing to set: pass at least one of stiffness, damping or max_force",
+            }
+        result = adapter.set_drive_params(
+            prim_path,
+            joint_name,
+            stiffness=stiffness,
+            damping=damping,
+            max_force=max_force,
+        )
+        warnings = list(result.pop("warnings", []) or [])
+        engine_warning = engine_gain_write_warning(adapter)
+        if engine_warning:
+            warnings.append(engine_warning)
+        response: Dict[str, Any] = {"status": "success", **result}
+        if warnings:
+            response["warnings"] = warnings
+        return response
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

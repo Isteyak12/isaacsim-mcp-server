@@ -24,7 +24,7 @@
 """Simulation control MCP tools."""
 
 import json
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -219,6 +219,51 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         try:
             conn = get_connection()
             result = conn.send_command("simulation.get_joint_config", {"prim_path": prim_path})
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+
+    @mcp.tool("set_drive_params")
+    def set_drive_params(
+        prim_path: str,
+        joint_name: str,
+        stiffness: Optional[float] = None,
+        damping: Optional[float] = None,
+        max_force: Optional[float] = None,
+    ) -> str:
+        """Write a joint drive's gains, in the units get_joint_config reports.
+
+        Use this to act on what get_joint_config diagnoses — a drive that is not
+        tracking, or one oscillating on a bad stiffness/damping ratio. Pass only
+        the fields you want changed; omitted ones are left alone.
+
+        Units: stiffness and damping are per-radian for an angular drive and
+        per-meter for a linear one — the same units get_joint_config hands you,
+        so a value read from there can be passed straight back. USD stores angular
+        gains per-degree and this tool converts; authoring one yourself through
+        execute_script does not, and lands 57.3x stiff. max_force is a torque
+        (angular) or a force (linear) and is written unconverted.
+
+        On the Newton engine the write reaches USD but not the running solver —
+        the response says so. Tune gains against a live sim on PhysX.
+
+        Args:
+            prim_path: USD path to the robot articulation root.
+            joint_name: Name of the joint to write, as reported by get_joint_config.
+            stiffness: Drive stiffness, per-radian (angular) or per-meter (linear).
+            damping: Drive damping, same units as stiffness.
+            max_force: Drive force/torque limit. Not unit-converted.
+        """
+        try:
+            conn = get_connection()
+            params: Dict[str, Any] = {"prim_path": prim_path, "joint_name": joint_name}
+            if stiffness is not None:
+                params["stiffness"] = stiffness
+            if damping is not None:
+                params["damping"] = damping
+            if max_force is not None:
+                params["max_force"] = max_force
+            result = conn.send_command("simulation.set_drive_params", params)
             return json.dumps(result, indent=2)
         except Exception as e:
             return json.dumps({"status": "error", "message": str(e)})

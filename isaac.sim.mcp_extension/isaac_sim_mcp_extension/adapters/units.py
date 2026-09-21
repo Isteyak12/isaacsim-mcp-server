@@ -63,9 +63,10 @@ hand-authored angular drive — which ``get_joint_config`` already reports as
 ``drive_type: angular``, because it probes rather than infers — has per-degree
 gains and metre limits at the same time.
 
-Both adapters and every reporting surface (``get_joint_config``,
-``get_robot_info``, ``set_drive_params``) go through here, so a third caller
-cannot reintroduce the split.
+Both adapters go through here, reading and writing: the reporting surfaces
+(``get_joint_config``, ``get_robot_info``) normalize on the way out, and
+``set_drive_params`` denormalizes on the way in. A caller that bypasses this
+module reintroduces the split in whichever direction it skipped.
 """
 
 from __future__ import annotations

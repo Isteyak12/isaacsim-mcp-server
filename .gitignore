@@ -25,6 +25,8 @@ MANIFEST
 
 # Virtual environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -92,3 +94,22 @@ mcp_cache/
 # mcp-publisher binary, downloaded ad hoc for a manual registry publish
 # (the release workflow fetches its own copy into the runner workspace)
 mcp-publisher
+
+# Credentials and keys (API keys for 3D generation, cloud tokens, SSH keys)
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+.netrc
+.git-credentials
+credentials.json
+.credentials.json
+secrets.*
+*.token
+
+# Live view / capture output (images and recordings of your scenes)
+*.mp4
+!media/*.mp4
+*.npz
+captures/

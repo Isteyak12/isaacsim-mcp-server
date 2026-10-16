@@ -19,7 +19,7 @@ Connect any MCP-compatible IDE (Cursor, VS Code, Claude Code, Windsurf, Antigrav
 
 ## Highlights
 
-- **42 tools** across 9 categories -- scene, objects, lighting, robots, sensors, materials, assets, simulation, graphs
+- **43 tools** across 9 categories -- scene, objects, lighting, robots, sensors, materials, assets, simulation, graphs
 - **107+ robots** auto-discovered from the Isaac Sim asset library (Franka, UR, Unitree, Boston Dynamics, and more)
 - **Step-and-observe** debugging -- step the simulation and inspect prim positions, joint states, and physics in one call
 - **Hot-reload** -- iterate on Python controllers without restarting Isaac Sim
@@ -92,7 +92,7 @@ uv sync
 You should see in the logs:
 
 ```
-Registered 42 command handlers
+Registered 43 command handlers
 Isaac Sim MCP server started on localhost:8766
 ```
 
@@ -388,7 +388,7 @@ Handlers -> Adapter -> Isaac Sim 5.1 / 6.0 APIs
 
 ## Tools
 
-42 tools across 9 categories:
+43 tools across 9 categories:
 
 | Category | Count | What you can do |
 |----------|------:|-----------------|
@@ -421,7 +421,7 @@ Handlers -> Adapter -> Isaac Sim 5.1 / 6.0 APIs
 
 **Graphs:** `create_action_graph` `edit_action_graph`
 
-**Simulation:** `play_simulation` `pause_simulation` `stop_simulation` `step_simulation` `set_physics_params` `get_isaac_logs` `get_simulation_state` `get_physics_state` `get_joint_config` `execute_script` `reload_script`
+**Simulation:** `play_simulation` `pause_simulation` `stop_simulation` `step_simulation` `set_physics_params` `get_isaac_logs` `get_simulation_state` `get_physics_state` `get_joint_config` `set_drive_params` `execute_script` `reload_script`
 
 </details>
 

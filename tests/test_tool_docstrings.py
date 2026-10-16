@@ -226,7 +226,11 @@ def test_create_physics_scene_docstring_qualifies_the_no_second_floor_claim():
 #
 # These are ratchets. Lower them when a docstring gets tighter; raising one is
 # a decision to spend context, and should be argued for in the commit.
-MAX_TOOL_DOCSTRING_CHARS = 19800
+#
+# Raised 19,800 -> 20,800 for set_drive_params (#51): a new tool is new
+# contract, not rationale, and its docstring and the gain_units line it added
+# to get_joint_config were already contract-only (measured 20,706).
+MAX_TOOL_DOCSTRING_CHARS = 20800
 MAX_SINGLE_DOCSTRING_LINES = 24
 
 
@@ -251,8 +255,8 @@ def test_tool_docstrings_stay_within_the_instruction_budget():
     total = sum(len(d) for d in docs.values())
 
     assert total <= MAX_TOOL_DOCSTRING_CHARS, (
-        "tool docstrings total %d chars (~%dk tokens), over the %d budget — "
-        "move rationale into code comments and keep the contract" % (total, total // 1000, MAX_TOOL_DOCSTRING_CHARS)
+        "tool docstrings total %d chars (~%.1fk tokens), over the %d budget — "
+        "move rationale into code comments and keep the contract" % (total, total / 4000, MAX_TOOL_DOCSTRING_CHARS)
     )
 
 

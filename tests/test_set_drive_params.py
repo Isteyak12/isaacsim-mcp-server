@@ -147,14 +147,6 @@ def test_command_is_registered_on_the_wire():
     assert "simulation.set_drive_params" in registry
 
 
-def test_base_declares_set_drive_params():
-    from isaac_sim_mcp_extension.adapters.base import IsaacAdapterBase
-
-    assert "set_drive_params" in IsaacAdapterBase.__abstractmethods__, (
-        "a version-specific write must be an abstract method, or one adapter can silently lack it"
-    )
-
-
 _ADAPTERS = os.path.join(os.path.dirname(__file__), "..", "isaac.sim.mcp_extension", "isaac_sim_mcp_extension")
 
 
@@ -164,34 +156,231 @@ def _func_src(filename, name):
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return ast.get_source_segment(src, node)
-    raise AssertionError(f"{name} not found in {filename}")
+    return None
 
 
-def test_both_adapters_implement_it():
+def test_one_shared_implementation_in_base():
+    """Pure USD, so one copy: two drift apart and 5.1 and 6.0 write differently."""
+    from isaac_sim_mcp_extension.adapters.base import IsaacAdapterBase
+
+    assert "set_drive_params" not in IsaacAdapterBase.__abstractmethods__
+    assert _func_src("base.py", "set_drive_params")
     for adapter_file in ("v5.py", "v6.py"):
-        assert _func_src(adapter_file, "set_drive_params"), adapter_file
+        assert _func_src(adapter_file, "set_drive_params") is None, f"{adapter_file} must not shadow base"
 
 
-def test_neither_adapter_writes_a_raw_gain():
-    """The inverse of the read path: a per-radian gain must not reach USD unconverted.
-
-    Authoring the reported value straight onto drive:angular:physics:stiffness
-    is the 57.3x bug this tool exists to remove — measured 5/5 on 6.0.1 PhysX
-    and 5/5 on 5.1.0, 3437746.75 -> 196968384.00.
-    """
+def test_read_and_write_resolve_the_drive_through_one_helper():
+    """If get_joint_config probed a different drive instance than the write,
+    the write would land in a different unit from the one the read reported."""
+    assert "find_joint_drive" in _func_src("base.py", "set_drive_params")
     for adapter_file in ("v5.py", "v6.py"):
-        src = _func_src(adapter_file, "set_drive_params")
-        assert "denormalize_gain" in src, f"{adapter_file} must convert before writing"
-        assert "180" not in src, f"{adapter_file} must not open-code the ratio; units.py owns it"
+        src = _func_src(adapter_file, "get_joint_config")
+        assert "find_joint_drive" in src, adapter_file
+        assert "DriveAPI.Get" not in src, f"{adapter_file} probes inline again"
 
 
-def test_max_force_is_not_converted():
-    """A torque on an angular drive, a force on a linear one — neither carries an angle."""
-    for adapter_file in ("v5.py", "v6.py"):
-        src = _func_src(adapter_file, "set_drive_params")
-        for line in src.splitlines():
-            if "max_force" in line and "denormalize_gain" in line:
-                raise AssertionError(f"{adapter_file} converts max_force: {line.strip()}")
+def test_write_converts_and_does_not_open_code_the_ratio():
+    """Authoring the reported value raw is the 57.3x bug this tool removes —
+    measured 5/5 on 6.0.1 PhysX and 5/5 on 5.1.0, 3437746.75 -> 196968384.00."""
+    src = _func_src("base.py", "set_drive_params")
+    assert "denormalize_gain" in src
+    assert "180" not in src, "units.py owns the ratio"
+
+
+# ── Behaviour against a fake stage ──────────────────────────────────────────
+
+
+class _Attr:
+    def __init__(self, value=None, override=None):
+        self.value, self.override = value, override
+
+    def Set(self, v):
+        self.value = v
+
+    def Get(self):
+        return self.override if self.override is not None else self.value
+
+
+class _Drive:
+    def __init__(self, override=None):
+        self.attrs = {k: _Attr(override=override) for k in ("stiffness", "damping", "max_force")}
+
+    def CreateStiffnessAttr(self):
+        return self.attrs["stiffness"]
+
+    def CreateDampingAttr(self):
+        return self.attrs["damping"]
+
+    def CreateMaxForceAttr(self):
+        return self.attrs["max_force"]
+
+
+class _Revolute:
+    pass
+
+
+class _Prismatic:
+    pass
+
+
+class _Prim:
+    def __init__(self, path, kind=None, drives=None, children=()):
+        self.path, self.kind, self.drives, self.children = path, kind, drives or {}, list(children)
+
+    def IsValid(self):
+        return True
+
+    def GetName(self):
+        return self.path.rsplit("/", 1)[-1]
+
+    def GetPath(self):
+        return self.path
+
+    def IsA(self, cls):
+        return self.kind is cls
+
+    def walk(self):
+        yield self
+        for c in self.children:
+            yield from c.walk()
+
+
+class _Stage:
+    def __init__(self, *roots):
+        self.prims = {p.path: p for r in roots for p in r.walk()}
+
+    def GetPrimAtPath(self, path):
+        return self.prims.get(path) or MagicMock(IsValid=lambda: False)
+
+
+def _install_fake_pxr(monkeypatch):
+    import types
+
+    usd = types.SimpleNamespace(PrimRange=lambda root: root.walk())
+    drive_api = types.SimpleNamespace(Get=lambda prim, t: prim.drives.get(t))
+    physics = types.SimpleNamespace(RevoluteJoint=_Revolute, PrismaticJoint=_Prismatic, DriveAPI=drive_api)
+    monkeypatch.setitem(__import__("sys").modules, "pxr", types.SimpleNamespace(Usd=usd, UsdPhysics=physics))
+
+
+def _robot(path, override=None):
+    j1 = _Prim(f"{path}/fr3_joint1", _Revolute, {"angular": _Drive(override)})
+    finger = _Prim(f"{path}/fr3_finger_joint1", _Prismatic, {"linear": _Drive(override)})
+    bare = _Prim(f"{path}/no_drive", _Revolute)
+    return _Prim(path, children=[j1, finger, bare])
+
+
+def _write(monkeypatch, stage, **kw):
+    from isaac_sim_mcp_extension.adapters.base import IsaacAdapterBase
+
+    _install_fake_pxr(monkeypatch)
+    fake_self = MagicMock(get_stage=lambda: stage)
+    return IsaacAdapterBase.set_drive_params(fake_self, **kw)
+
+
+def test_angular_gain_is_stored_per_degree_and_read_back(monkeypatch):
+    robot = _robot("/World/A")
+    out = _write(monkeypatch, _Stage(robot), prim_path="/World/A", joint_name="fr3_joint1", stiffness=1000.0)
+    stored = robot.children[0].drives["angular"].attrs["stiffness"].value
+    assert math.isclose(stored, 1000.0 / DEG_PER_RAD)
+    assert math.isclose(out["stiffness"], 1000.0), "the response is the read-back, normalized"
+    assert out["joint_path"] == "/World/A/fr3_joint1"
+    assert "warnings" not in out
+
+
+def test_linear_gain_and_max_force_pass_through(monkeypatch):
+    robot = _robot("/World/A")
+    out = _write(
+        monkeypatch,
+        _Stage(robot),
+        prim_path="/World/A",
+        joint_name="fr3_finger_joint1",
+        stiffness=777.0,
+        max_force=99.0,
+    )
+    attrs = robot.children[1].drives["linear"].attrs
+    assert attrs["stiffness"].value == 777.0 and attrs["max_force"].value == 99.0
+    assert out["drive_type"] == "linear"
+
+
+def test_ambiguous_joint_name_is_refused(monkeypatch):
+    """prim_path above two robots: writing the first match would silently miss the other."""
+    world = _Prim("/World", children=[_robot("/World/A"), _robot("/World/B")])
+    try:
+        _write(monkeypatch, _Stage(world), prim_path="/World", joint_name="fr3_joint1", stiffness=1.0)
+    except ValueError as e:
+        assert "/World/A/fr3_joint1" in str(e) and "/World/B/fr3_joint1" in str(e)
+    else:
+        raise AssertionError("an ambiguous joint name must not write")
+
+
+def test_stronger_opinion_is_reported_not_echoed(monkeypatch):
+    """A weaker edit target leaves the old value in force; echoing the input would hide it."""
+    robot = _robot("/World/A", override=5.0)
+    out = _write(monkeypatch, _Stage(robot), prim_path="/World/A", joint_name="fr3_joint1", stiffness=1000.0)
+    assert not math.isclose(out["stiffness"], 1000.0)
+    assert out["warnings"] and "stronger layer" in out["warnings"][0]
+
+
+def test_joint_without_a_drive_is_refused(monkeypatch):
+    try:
+        _write(monkeypatch, _Stage(_robot("/World/A")), prim_path="/World/A", joint_name="no_drive", stiffness=1.0)
+    except ValueError as e:
+        assert "no UsdPhysicsDriveAPI" in str(e)
+    else:
+        raise AssertionError("a joint with no drive must not report success")
+
+
+def test_bad_values_are_refused_before_anything_is_written(monkeypatch):
+    for kw in (
+        {"stiffness": -400.0},
+        {"damping": float("nan")},
+        {"stiffness": float("inf")},
+        {"stiffness": "abc"},
+        {"max_force": -1.0},
+    ):
+        robot = _robot("/World/A")
+        try:
+            _write(monkeypatch, _Stage(robot), prim_path="/World/A", joint_name="fr3_joint1", **kw)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{kw} must be refused")
+        assert all(a.value is None for a in robot.children[0].drives["angular"].attrs.values()), kw
+
+
+def test_infinite_max_force_is_allowed(monkeypatch):
+    """inf is USD's default maxForce and means unlimited."""
+    robot = _robot("/World/A")
+    out = _write(monkeypatch, _Stage(robot), prim_path="/World/A", joint_name="fr3_joint1", max_force=float("inf"))
+    assert math.isinf(out["max_force"])
+
+
+def test_max_force_is_not_converted_on_an_angular_drive(monkeypatch):
+    """A torque carries no angle: 99 N·m stays 99, unlike the gains beside it."""
+    robot = _robot("/World/A")
+    _write(monkeypatch, _Stage(robot), prim_path="/World/A", joint_name="fr3_joint1", max_force=99.0)
+    assert robot.children[0].drives["angular"].attrs["max_force"].value == 99.0
+
+
+def test_applied_to_solver_is_a_field_not_only_a_warning():
+    """An agent that skips warnings must still see that Newton kept the old gain."""
+    for engine, expected in (("physx", True), ("newton", False)):
+        adapter = MagicMock()
+        adapter.engine = engine
+        adapter.ENGINE_NEWTON = "newton"
+        adapter.set_drive_params.return_value = {"joint": "fr3_joint1", "stiffness": 1000.0}
+        result = sim.set_drive_params_handler(adapter, prim_path="/World/A", joint_name="fr3_joint1", stiffness=1000.0)
+        assert result["applied_to_solver"] is expected, engine
+
+
+def test_stage_override_is_not_applied_to_solver():
+    adapter = MagicMock()
+    adapter.engine = "physx"
+    adapter.ENGINE_NEWTON = "newton"
+    adapter.set_drive_params.return_value = {"stiffness": 5.0, "warnings": ["stiffness: a stronger layer opinion"]}
+    result = sim.set_drive_params_handler(adapter, prim_path="/World/A", joint_name="fr3_joint1", stiffness=1000.0)
+    assert result["applied_to_solver"] is False
+    assert result["warnings"] == ["stiffness: a stronger layer opinion"]
 
 
 # ── The agent-facing tool ───────────────────────────────────────────────────
@@ -230,12 +419,9 @@ def test_tool_docstring_states_the_unit_it_accepts():
 
 
 def test_units_docstring_no_longer_promises_a_tool_that_does_not_exist():
-    """units.py has claimed set_drive_params routes through the gain helpers
-    since the read path landed. Now that it does, the claim has to be true."""
+    """units.py names set_drive_params as its write half; the claim has to be true."""
     path = os.path.join(_ADAPTERS, "adapters", "units.py")
     with open(path) as f:
         units_src = f.read()
     if "set_drive_params" in units_src:
-        v5 = _func_src("v5.py", "set_drive_params")
-        v6 = _func_src("v6.py", "set_drive_params")
-        assert "denormalize_gain" in v5 and "denormalize_gain" in v6
+        assert "denormalize_gain" in _func_src("base.py", "set_drive_params")

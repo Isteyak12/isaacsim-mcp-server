@@ -235,10 +235,11 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         Use after get_joint_config shows a drive not tracking or oscillating. Pass only
         the fields to change. Gains take the units get_joint_config reports (per-radian
         or per-meter, its `gain_units`), so a value read there can be passed back
-        unchanged. Errors if the joint has no drive.
+        unchanged. Values must be >= 0. Errors if the joint has no drive, or its name
+        matches several joints under prim_path.
 
-        On Newton the stage is updated but the running solver keeps its old gain (the
-        response warns); tune live gains on PhysX.
+        On Newton the stage is updated but the running solver keeps its old gain
+        (`applied_to_solver: false`); tune live gains on PhysX.
 
         Args:
             prim_path: Robot articulation root, as passed to get_joint_config.

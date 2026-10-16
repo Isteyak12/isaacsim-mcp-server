@@ -297,11 +297,14 @@ def set_drive_params_handler(
             damping=damping,
             max_force=max_force,
         )
+        # Adapter warnings mean a stronger layer opinion kept the old value.
         warnings = list(result.pop("warnings", []) or [])
         engine_warning = engine_gain_write_warning(adapter)
         if engine_warning:
             warnings.append(engine_warning)
-        response: Dict[str, Any] = {"status": "success", **result}
+        # A field, not just a warning string: a caller that skips warnings and
+        # steps on Newton would otherwise tune a gain the solver never sees.
+        response: Dict[str, Any] = {"status": "success", **result, "applied_to_solver": not warnings}
         if warnings:
             response["warnings"] = warnings
         return response

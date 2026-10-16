@@ -86,7 +86,6 @@ def test_adapter_base_has_all_abstract_methods():
         "get_simulation_state",
         "get_physics_state",
         "get_joint_config",
-        "set_drive_params",
         "reload_script",
         # Dimensional data (issue #2)
         "get_prim_actual_size",

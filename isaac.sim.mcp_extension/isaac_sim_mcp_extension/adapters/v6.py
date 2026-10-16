@@ -29,9 +29,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .base import IsaacAdapterBase, collect_prims, drop_stale_bytecode, spherical_to_cartesian
+from .base import IsaacAdapterBase, collect_prims, drop_stale_bytecode, find_joint_drive, spherical_to_cartesian
 from .transforms import read_transform, set_transform
-from .units import denormalize_gain, gain_units, limit_units, normalize_gain, normalize_limit
+from .units import gain_units, limit_units, normalize_gain, normalize_limit
 from .version import version_string
 
 if TYPE_CHECKING:
@@ -788,23 +788,21 @@ class IsaacAdapterV6(IsaacAdapterBase):
                 joint_data["lower_limit"] = normalize_limit(lower_attr.Get() if lower_attr else None, joint_type)
                 joint_data["upper_limit"] = normalize_limit(upper_attr.Get() if upper_attr else None, joint_type)
                 joint_data["limit_units"] = limit_units(joint_type)
-                for drive_type in ["angular", "linear"]:
-                    drive_api = UsdPhysics.DriveAPI.Get(desc, drive_type)
-                    if drive_api:
-                        joint_data["drive_type"] = drive_type
-                        stiffness_attr = drive_api.GetStiffnessAttr()
-                        damping_attr = drive_api.GetDampingAttr()
-                        target_attr = drive_api.GetTargetPositionAttr()
-                        # USD keeps an angular drive's gains per degree while
-                        # every position and limit here is per radian. See
-                        # adapters/units.py.
-                        joint_data["stiffness"] = normalize_gain(
-                            stiffness_attr.Get() if stiffness_attr else None, drive_type
-                        )
-                        joint_data["damping"] = normalize_gain(damping_attr.Get() if damping_attr else None, drive_type)
-                        joint_data["gain_units"] = gain_units(drive_type)
-                        joint_data["target_position"] = target_attr.Get() if target_attr else None
-                        break
+                drive_api, drive_type = find_joint_drive(desc)
+                if drive_api:
+                    joint_data["drive_type"] = drive_type
+                    stiffness_attr = drive_api.GetStiffnessAttr()
+                    damping_attr = drive_api.GetDampingAttr()
+                    target_attr = drive_api.GetTargetPositionAttr()
+                    # USD keeps an angular drive's gains per degree while
+                    # every position and limit here is per radian. See
+                    # adapters/units.py.
+                    joint_data["stiffness"] = normalize_gain(
+                        stiffness_attr.Get() if stiffness_attr else None, drive_type
+                    )
+                    joint_data["damping"] = normalize_gain(damping_attr.Get() if damping_attr else None, drive_type)
+                    joint_data["gain_units"] = gain_units(drive_type)
+                    joint_data["target_position"] = target_attr.Get() if target_attr else None
                 jname = desc.GetName()
                 if jname in joint_names:
                     idx = joint_names.index(jname)
@@ -833,64 +831,6 @@ class IsaacAdapterV6(IsaacAdapterBase):
         if warnings:
             result["warnings"] = warnings
         return result
-
-    def set_drive_params(
-        self,
-        prim_path: str,
-        joint_name: str,
-        stiffness: Optional[float] = None,
-        damping: Optional[float] = None,
-        max_force: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        from pxr import Usd, UsdPhysics
-
-        stage = self.get_stage()
-        root = stage.GetPrimAtPath(prim_path)
-        if not root.IsValid():
-            raise ValueError(f"Prim not found: {prim_path}")
-
-        joint = None
-        for desc in Usd.PrimRange(root):
-            if desc.GetName() == joint_name and (
-                desc.IsA(UsdPhysics.RevoluteJoint) or desc.IsA(UsdPhysics.PrismaticJoint)
-            ):
-                joint = desc
-                break
-        if joint is None:
-            raise ValueError(f"Joint '{joint_name}' not found under {prim_path}")
-
-        # Probe for the drive rather than inferring it from the joint type:
-        # get_joint_config resolves it the same way, so a prismatic joint
-        # carrying a hand-authored angular drive reads and writes consistently.
-        drive_api = None
-        drive_type = None
-        for candidate in ("angular", "linear"):
-            found = UsdPhysics.DriveAPI.Get(joint, candidate)
-            if found:
-                drive_api, drive_type = found, candidate
-                break
-        if drive_api is None:
-            raise ValueError(f"Joint '{joint_name}' carries no UsdPhysicsDriveAPI to write")
-
-        applied: Dict[str, Any] = {}
-        if stiffness is not None:
-            drive_api.CreateStiffnessAttr().Set(denormalize_gain(stiffness, drive_type))
-            applied["stiffness"] = stiffness
-        if damping is not None:
-            drive_api.CreateDampingAttr().Set(denormalize_gain(damping, drive_type))
-            applied["damping"] = damping
-        if max_force is not None:
-            # A torque on an angular drive, a force on a linear one; no angle.
-            drive_api.CreateMaxForceAttr().Set(float(max_force))
-            applied["max_force"] = max_force
-
-        return {
-            "prim_path": prim_path,
-            "joint": joint_name,
-            "drive_type": drive_type,
-            "gain_units": gain_units(drive_type),
-            **applied,
-        }
 
     # ── Physics ────────────────────────────────────────────
 

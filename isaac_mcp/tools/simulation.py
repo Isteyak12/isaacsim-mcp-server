@@ -24,7 +24,7 @@
 """Simulation control MCP tools."""
 
 import json
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -210,8 +210,7 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         - Joints hit limits unexpectedly (check lower_limit/upper_limit)
 
         Units: gains are per-radian (angular) or per-meter (linear), per each joint's
-        `gain_units`. USD stores angular gains per-degree — divide by 180/pi before
-        writing one back via execute_script, or the drive lands 57.3x stiff, silently.
+        `gain_units`. Write them back with set_drive_params, which takes the same units.
 
         Args:
             prim_path: USD path to the robot articulation root.
@@ -219,6 +218,46 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         try:
             conn = get_connection()
             result = conn.send_command("simulation.get_joint_config", {"prim_path": prim_path})
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+
+    @mcp.tool("set_drive_params")
+    def set_drive_params(
+        prim_path: str,
+        joint_name: str,
+        stiffness: Optional[float] = None,
+        damping: Optional[float] = None,
+        max_force: Optional[float] = None,
+    ) -> str:
+        """Write a joint drive's stiffness, damping and/or max_force.
+
+        Use after get_joint_config shows a drive not tracking or oscillating. Pass only
+        the fields to change. Gains take the units get_joint_config reports (per-radian
+        or per-meter, its `gain_units`), so a value read there can be passed back
+        unchanged. Values must be >= 0. Errors if the joint has no drive, or its name
+        matches several joints under prim_path.
+
+        On Newton the stage is updated but the running solver keeps its old gain
+        (`applied_to_solver: false`); tune live gains on PhysX.
+
+        Args:
+            prim_path: Robot articulation root, as passed to get_joint_config.
+            joint_name: Joint name as reported by get_joint_config.
+            stiffness: Drive stiffness.
+            damping: Drive damping.
+            max_force: Torque (angular) or force (linear) limit; not unit-converted.
+        """
+        try:
+            conn = get_connection()
+            params: Dict[str, Any] = {"prim_path": prim_path, "joint_name": joint_name}
+            if stiffness is not None:
+                params["stiffness"] = stiffness
+            if damping is not None:
+                params["damping"] = damping
+            if max_force is not None:
+                params["max_force"] = max_force
+            result = conn.send_command("simulation.set_drive_params", params)
             return json.dumps(result, indent=2)
         except Exception as e:
             return json.dumps({"status": "error", "message": str(e)})

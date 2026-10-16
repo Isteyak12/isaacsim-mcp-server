@@ -78,7 +78,7 @@ Scripts/Action Graphs operate WITHIN frames (runtime-level): control loops, IK, 
 The debug loop is step-only: set_joint_positions + step_simulation with
 observe_prims/observe_joints on a FROZEN timeline. Do NOT call play_simulation
 while debugging — step errors if the timeline is already playing. If issues:
-get_joint_config, get_physics_state, get_isaac_logs.
+get_joint_config (fix gains: set_drive_params), get_physics_state, get_isaac_logs.
 play_simulation is ONLY for a final continuous run / ScriptNode demo.
 Two separate debug modes: MCP loop = step on a frozen timeline (no graph);
 ScriptNode/Action-Graph = play + get_isaac_logs (graphs tick only while playing

@@ -26,13 +26,52 @@
 from __future__ import annotations
 
 import contextlib
+import math
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .units import denormalize_gain, gain_units, normalize_gain
+
 if TYPE_CHECKING:
     from pxr import Usd
+
+
+def find_joint_drive(joint) -> Tuple[Any, Optional[str]]:
+    """The joint's UsdPhysicsDriveAPI and its instance name, or (None, None).
+
+    Probes rather than inferring from the joint type, so a prismatic joint
+    carrying a hand-authored angular drive resolves to the angular instance —
+    whose gains are per degree. get_joint_config and set_drive_params both go
+    through here: if they resolved different instances, the write would land
+    in a different unit from the one the read reported.
+    """
+    from pxr import UsdPhysics
+
+    for drive_type in ("angular", "linear"):
+        drive = UsdPhysics.DriveAPI.Get(joint, drive_type)
+        if drive:
+            return drive, drive_type
+    return None, None
+
+
+def _drive_value(name: str, value: Any, allow_inf: bool = False) -> float:
+    """A drive parameter as a float, or ValueError naming what was wrong.
+
+    Without this a sign slip or NaN is authored and reported as success, and
+    the failure surfaces steps later as a diverging drive with nothing tying it
+    back to the call. ``max_force`` alone may be inf: that is USD's default and
+    means unlimited.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number, got {value!r}") from None
+    if math.isnan(number) or number < 0 or (math.isinf(number) and not allow_inf):
+        bound = ">= 0 (inf allowed: unlimited)" if allow_inf else "finite and >= 0"
+        raise ValueError(f"{name} must be {bound}, got {value!r}")
+    return number
 
 
 def _needs_arguments(method) -> bool:
@@ -270,6 +309,92 @@ class IsaacAdapterBase(ABC):
     def get_joint_config(self, prim_path: str) -> Dict[str, Any]:
         """Return joint drive configuration: stiffness, damping, limits, target vs actual positions."""
         ...
+
+    def set_drive_params(
+        self,
+        prim_path: str,
+        joint_name: str,
+        stiffness: Optional[float] = None,
+        damping: Optional[float] = None,
+        max_force: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Write a joint drive's gains, in the units ``get_joint_config`` reports.
+
+        ``stiffness`` and ``damping`` arrive per radian for an angular drive and
+        per stage unit for a linear one, and are converted to USD's per-degree
+        storage by ``units.denormalize_gain`` before being authored. Writing the
+        reported value straight onto ``drive:angular:physics:stiffness`` instead
+        makes the drive 57.3x stiffer than asked, silently — that is the whole
+        reason this is a tool and not a note telling callers to do the arithmetic.
+
+        ``max_force`` is a torque on an angular drive and a force on a linear one.
+        Neither carries an angle, so it is written unconverted.
+
+        Pure USD, so it lives here rather than once per adapter. The response
+        carries what the stage resolves after the write, not the caller's input:
+        a stronger layer opinion would otherwise leave the old gain in force
+        while the response reported the new one.
+        """
+        from pxr import Usd, UsdPhysics
+
+        values = {}
+        if stiffness is not None:
+            values["stiffness"] = _drive_value("stiffness", stiffness)
+        if damping is not None:
+            values["damping"] = _drive_value("damping", damping)
+        if max_force is not None:
+            values["max_force"] = _drive_value("max_force", max_force, allow_inf=True)
+
+        root = self.get_stage().GetPrimAtPath(prim_path)
+        if not root.IsValid():
+            raise ValueError(f"Prim not found: {prim_path}")
+        matches = [
+            p
+            for p in Usd.PrimRange(root)
+            if p.GetName() == joint_name and (p.IsA(UsdPhysics.RevoluteJoint) or p.IsA(UsdPhysics.PrismaticJoint))
+        ]
+        if not matches:
+            raise ValueError(f"Joint '{joint_name}' not found under {prim_path}")
+        if len(matches) > 1:
+            paths = ", ".join(str(p.GetPath()) for p in matches)
+            raise ValueError(
+                f"Joint '{joint_name}' matches {len(matches)} joints under {prim_path} ({paths}); "
+                "pass the robot's own root as prim_path"
+            )
+        joint = matches[0]
+
+        drive, drive_type = find_joint_drive(joint)
+        if drive is None:
+            raise ValueError(f"Joint '{joint_name}' carries no UsdPhysicsDriveAPI to write")
+
+        attrs = {
+            "stiffness": drive.CreateStiffnessAttr,
+            "damping": drive.CreateDampingAttr,
+            "max_force": drive.CreateMaxForceAttr,
+        }
+        result: Dict[str, Any] = {
+            "prim_path": prim_path,
+            "joint": joint_name,
+            "joint_path": str(joint.GetPath()),
+            "drive_type": drive_type,
+            "gain_units": gain_units(drive_type),
+        }
+        warnings = []
+        for name, value in values.items():
+            attr = attrs[name]()
+            # max_force is a torque (angular) or a force (linear): no angle.
+            attr.Set(value if name == "max_force" else denormalize_gain(value, drive_type))
+            stored = attr.Get()
+            resolved = float(stored) if name == "max_force" else normalize_gain(stored, drive_type)
+            result[name] = resolved
+            if resolved is None or not math.isclose(resolved, value, rel_tol=1e-6):
+                warnings.append(
+                    f"{name}: asked {value}, but the stage resolves {resolved} — a stronger layer opinion "
+                    "overrides the edit target, so the old value stays in force."
+                )
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     # ── Physics ────────────────────────────────────────────
 

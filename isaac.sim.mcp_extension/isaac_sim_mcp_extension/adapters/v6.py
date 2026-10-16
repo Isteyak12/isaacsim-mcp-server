@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .base import IsaacAdapterBase, collect_prims, drop_stale_bytecode, spherical_to_cartesian
+from .base import IsaacAdapterBase, collect_prims, drop_stale_bytecode, find_joint_drive, spherical_to_cartesian
 from .transforms import read_transform, set_transform
 from .units import gain_units, limit_units, normalize_gain, normalize_limit
 from .version import version_string
@@ -788,23 +788,21 @@ class IsaacAdapterV6(IsaacAdapterBase):
                 joint_data["lower_limit"] = normalize_limit(lower_attr.Get() if lower_attr else None, joint_type)
                 joint_data["upper_limit"] = normalize_limit(upper_attr.Get() if upper_attr else None, joint_type)
                 joint_data["limit_units"] = limit_units(joint_type)
-                for drive_type in ["angular", "linear"]:
-                    drive_api = UsdPhysics.DriveAPI.Get(desc, drive_type)
-                    if drive_api:
-                        joint_data["drive_type"] = drive_type
-                        stiffness_attr = drive_api.GetStiffnessAttr()
-                        damping_attr = drive_api.GetDampingAttr()
-                        target_attr = drive_api.GetTargetPositionAttr()
-                        # USD keeps an angular drive's gains per degree while
-                        # every position and limit here is per radian. See
-                        # adapters/units.py.
-                        joint_data["stiffness"] = normalize_gain(
-                            stiffness_attr.Get() if stiffness_attr else None, drive_type
-                        )
-                        joint_data["damping"] = normalize_gain(damping_attr.Get() if damping_attr else None, drive_type)
-                        joint_data["gain_units"] = gain_units(drive_type)
-                        joint_data["target_position"] = target_attr.Get() if target_attr else None
-                        break
+                drive_api, drive_type = find_joint_drive(desc)
+                if drive_api:
+                    joint_data["drive_type"] = drive_type
+                    stiffness_attr = drive_api.GetStiffnessAttr()
+                    damping_attr = drive_api.GetDampingAttr()
+                    target_attr = drive_api.GetTargetPositionAttr()
+                    # USD keeps an angular drive's gains per degree while
+                    # every position and limit here is per radian. See
+                    # adapters/units.py.
+                    joint_data["stiffness"] = normalize_gain(
+                        stiffness_attr.Get() if stiffness_attr else None, drive_type
+                    )
+                    joint_data["damping"] = normalize_gain(damping_attr.Get() if damping_attr else None, drive_type)
+                    joint_data["gain_units"] = gain_units(drive_type)
+                    joint_data["target_position"] = target_attr.Get() if target_attr else None
                 jname = desc.GetName()
                 if jname in joint_names:
                     idx = joint_names.index(jname)

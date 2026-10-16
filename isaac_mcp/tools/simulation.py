@@ -210,8 +210,7 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         - Joints hit limits unexpectedly (check lower_limit/upper_limit)
 
         Units: gains are per-radian (angular) or per-meter (linear), per each joint's
-        `gain_units`. USD stores angular gains per-degree — divide by 180/pi before
-        writing one back via execute_script, or the drive lands 57.3x stiff, silently.
+        `gain_units`. Write them back with set_drive_params, which takes the same units.
 
         Args:
             prim_path: USD path to the robot articulation root.
@@ -231,28 +230,22 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         damping: Optional[float] = None,
         max_force: Optional[float] = None,
     ) -> str:
-        """Write a joint drive's gains, in the units get_joint_config reports.
+        """Write a joint drive's stiffness, damping and/or max_force.
 
-        Use this to act on what get_joint_config diagnoses — a drive that is not
-        tracking, or one oscillating on a bad stiffness/damping ratio. Pass only
-        the fields you want changed; omitted ones are left alone.
+        Use after get_joint_config shows a drive not tracking or oscillating. Pass only
+        the fields to change. Gains take the units get_joint_config reports (per-radian
+        or per-meter, its `gain_units`), so a value read there can be passed back
+        unchanged. Errors if the joint has no drive.
 
-        Units: stiffness and damping are per-radian for an angular drive and
-        per-meter for a linear one — the same units get_joint_config hands you,
-        so a value read from there can be passed straight back. USD stores angular
-        gains per-degree and this tool converts; authoring one yourself through
-        execute_script does not, and lands 57.3x stiff. max_force is a torque
-        (angular) or a force (linear) and is written unconverted.
-
-        On the Newton engine the write reaches USD but not the running solver —
-        the response says so. Tune gains against a live sim on PhysX.
+        On Newton the stage is updated but the running solver keeps its old gain (the
+        response warns); tune live gains on PhysX.
 
         Args:
-            prim_path: USD path to the robot articulation root.
-            joint_name: Name of the joint to write, as reported by get_joint_config.
-            stiffness: Drive stiffness, per-radian (angular) or per-meter (linear).
-            damping: Drive damping, same units as stiffness.
-            max_force: Drive force/torque limit. Not unit-converted.
+            prim_path: Robot articulation root, as passed to get_joint_config.
+            joint_name: Joint name as reported by get_joint_config.
+            stiffness: Drive stiffness.
+            damping: Drive damping.
+            max_force: Torque (angular) or force (linear) limit; not unit-converted.
         """
         try:
             conn = get_connection()

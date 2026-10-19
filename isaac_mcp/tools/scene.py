@@ -56,7 +56,7 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
         Returns "ground_plane" (the floor objects will actually land on) and
         "ground_plane_created". Read the floor height from that prim rather than
         assuming z=0. Only a collision-enabled prim of type Plane is recognised, so
-        an environment with a Mesh floor still stacks — when "ground_plane_created"
+        an environment with a Mesh floor gets a second floor — when "ground_plane_created"
         is true after loading one, verify the floor before placing anything on it.
 
         Args:
@@ -140,9 +140,9 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
                            distance, reach or contact; for a nested prim such as a
                            robot link the two differ by the parent's pose.
         position_world_source is "usd" (from the authored transform) or "physics"
-        (measured, on Newton). A Newton body may carry position_warning or
-        position_local_warning saying a value is its spawn pose — read it through
-        get_physics_state instead.
+        (measured, on Newton). On Newton, position_local_warning means only
+        position_local is the spawn pose (position_world is measured);
+        position_warning means both are — read the body through get_physics_state.
 
         rotation [rx, ry, rz] degrees (XYZ, the convention transform_object accepts)
         and scale are local, like position_local. Geometric prims also return

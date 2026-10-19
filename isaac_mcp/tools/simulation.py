@@ -83,8 +83,10 @@ def register_tools(mcp: FastMCP, get_connection: "Callable[[], IsaacConnection]"
 
         Args:
             num_steps: Number of simulation frames to step.
-            observe_prims: Prim paths to observe. Each returns position_world — the
-                frame is named, as in get_prim_info — plus linear/angular velocity.
+            observe_prims: Prim paths to observe. Each returns position_world, or
+                position_local plus position_world_warning when the world pose
+                cannot be read — the frame is always named, as in get_prim_info.
+                Rigid bodies also return linear/angular velocity.
             observe_joints: Articulation prim paths to observe (returns joint positions).
         """
         try:

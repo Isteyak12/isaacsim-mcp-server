@@ -216,52 +216,83 @@ def test_create_physics_scene_docstring_qualifies_the_no_second_floor_claim():
 # Every tool docstring is in the agent's context on EVERY call, so the block of
 # them is a standing cost paid per request, not per use of that tool. Each fix
 # to this server has added a paragraph explaining what went wrong, and the
-# explanations came to outweigh the instructions: 23,350 characters across the
-# tool docstrings (~5.8k tokens) before this budget existed, trimmed to 19,730
-# (~4.9k) by moving rationale out without dropping any contract.
+# explanations came to outweigh the instructions: 23,350 characters of
+# dedented tool docstrings (~5.8k tokens) before this budget existed, trimmed
+# to 19,730 (~4.9k) by moving rationale out without dropping any contract.
 #
 # That dilutes the lines an agent must actually act on. Rationale belongs in
 # code comments and commit messages, which cost the agent nothing; docstrings
 # carry the contract -- fields returned, ordering rules, actionable limits.
+#
+# The cap is measured on what list_tools() sends, not on the source: before
+# Python 3.13 FastMCP sent the raw, indented __doc__ (23,511 characters on
+# 3.10 against 20,564 dedented), so registration now dedents every docstring.
 #
 # These are ratchets. Lower them when a docstring gets tighter; raising one is
 # a decision to spend context, and should be argued for in the commit.
 #
 # Raised 19,800 -> 20,800 for set_drive_params (#51): a new tool is new
 # contract, not rationale, and its docstring and the gain_units line it added
-# to get_joint_config were already contract-only (measured 20,706).
+# to get_joint_config were already contract-only.
 MAX_TOOL_DOCSTRING_CHARS = 20800
 MAX_SINGLE_DOCSTRING_LINES = 24
 
 
-def _tool_docstrings():
-    import ast
-    import glob
+def _sent_tool_descriptions():
+    """Tool descriptions exactly as the MCP client receives them.
 
-    out = {}
-    for path in sorted(glob.glob(os.path.join(TOOLS_DIR, "*.py"))):
-        with open(path) as f:
-            tree = ast.parse(f.read())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                doc = ast.get_docstring(node)
-                if doc:
-                    out["%s:%s" % (os.path.basename(path), node.name)] = doc
-    return out
+    ast.get_docstring dedents, but FastMCP sends the function's raw __doc__,
+    which keeps its indentation before Python 3.13 -- so measuring source
+    docstrings under-counted what an agent on 3.10 (the floor, and CI) gets.
+    """
+    import asyncio
+
+    from mcp.server.fastmcp import FastMCP
+
+    from isaac_mcp.tools import register_all_tools
+
+    server = FastMCP("budget-probe")
+    register_all_tools(server, lambda: None)
+    return {t.name: t.description or "" for t in asyncio.run(server.list_tools())}
 
 
 def test_tool_docstrings_stay_within_the_instruction_budget():
-    docs = _tool_docstrings()
+    docs = _sent_tool_descriptions()
     total = sum(len(d) for d in docs.values())
 
     assert total <= MAX_TOOL_DOCSTRING_CHARS, (
-        "tool docstrings total %d chars (~%.1fk tokens), over the %d budget — "
+        "tool descriptions total %d chars (~%.1fk tokens), over the %d budget — "
         "move rationale into code comments and keep the contract" % (total, total / 4000, MAX_TOOL_DOCSTRING_CHARS)
     )
 
 
+def test_registered_tool_descriptions_are_dedented_on_every_python():
+    """Before 3.13 a raw __doc__ carries 8 spaces of indentation per line.
+
+    That was ~3k characters of whitespace in every request on Python 3.10-3.12,
+    and it made the size an agent receives depend on the server's interpreter.
+    The docstring is assigned by hand so this fails on 3.13+ too if the
+    registration stops cleaning it.
+    """
+    import asyncio
+
+    from mcp.server.fastmcp import FastMCP
+
+    from isaac_mcp.tools import _CleanDocstrings
+
+    def probe() -> str:
+        return ""
+
+    probe.__doc__ = "First line.\n\n        Indented body.\n            Nested.\n        "
+    server = FastMCP("dedent-probe")
+    _CleanDocstrings(server).tool("probe")(probe)
+    (tool,) = asyncio.run(server.list_tools())
+
+    assert tool.description == "First line.\n\nIndented body.\n    Nested."
+
+
 def test_no_single_tool_docstring_dominates_the_budget():
-    docs = _tool_docstrings()
+    docs = _sent_tool_descriptions()
     oversized = {k: len(v.splitlines()) for k, v in docs.items() if len(v.splitlines()) > MAX_SINGLE_DOCSTRING_LINES}
 
     assert not oversized, (

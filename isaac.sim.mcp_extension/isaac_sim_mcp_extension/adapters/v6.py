@@ -630,8 +630,12 @@ class IsaacAdapterV6(IsaacAdapterBase):
             art = self._new_articulation(prim_path)
             positions_arr = wp.array(np.asarray([list(positions)], dtype=np.float32), dtype=wp.float32)
             if joint_indices is not None:
+                # dof_indices, not indices: `indices` selects which wrapped
+                # PRIMS to write. This view wraps one robot, so a joint index
+                # there addressed a robot that does not exist -- the target
+                # never landed, and on PhysX the next step could crash Kit.
                 idx_arr = wp.array(np.asarray(joint_indices, dtype=np.int32), dtype=wp.int32)
-                art.set_dof_position_targets(positions_arr, indices=idx_arr)
+                art.set_dof_position_targets(positions_arr, dof_indices=idx_arr)
             else:
                 art.set_dof_position_targets(positions_arr)
             return True

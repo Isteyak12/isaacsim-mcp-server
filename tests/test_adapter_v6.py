@@ -188,9 +188,14 @@ def test_v6_ensure_physics_world_calls_simulation_manager(monkeypatch):
     assert adapter._engine == "newton"
 
 
-def test_v6_set_joint_positions_calls_set_dof_position_targets(monkeypatch):
-    """V6.set_joint_positions must build an Articulation and forward to set_dof_position_targets."""
-    captured = {}
+def _v6_adapter_with_fake_articulation(monkeypatch, captured):
+    """A V6 adapter whose Articulation records what set_dof_position_targets got.
+
+    The fake mirrors the real signature in isaacsim.core.experimental.prims:
+    `indices` selects which wrapped PRIMS to write, `dof_indices` which DOFs.
+    The previous fake took only `indices`, so it could not tell the two apart --
+    which is how a DOF index passed as a prim index survived the unit suite.
+    """
 
     class _Articulation:
         def __init__(self, paths):
@@ -199,9 +204,10 @@ def test_v6_set_joint_positions_calls_set_dof_position_targets(monkeypatch):
         def is_physics_tensor_entity_initialized(self):
             return True
 
-        def set_dof_position_targets(self, positions, indices=None):
+        def set_dof_position_targets(self, positions, indices=None, dof_indices=None):
             captured["positions"] = positions
             captured["indices"] = indices
+            captured["dof_indices"] = dof_indices
 
         def get_dof_indices(self, names):
             captured["dof_indices_names"] = names
@@ -212,6 +218,7 @@ def test_v6_set_joint_positions_calls_set_dof_position_targets(monkeypatch):
     fake_warp_mod = types.ModuleType("warp")
     fake_warp_mod.array = lambda data, dtype=None: list(data)
     fake_warp_mod.float32 = "float32"
+    fake_warp_mod.int32 = "int32"
 
     monkeypatch.setitem(sys.modules, "warp", fake_warp_mod)
     monkeypatch.setitem(sys.modules, "isaacsim.core.experimental", types.ModuleType("isaacsim.core.experimental"))
@@ -238,10 +245,38 @@ def test_v6_set_joint_positions_calls_set_dof_position_targets(monkeypatch):
     import isaac_sim_mcp_extension.adapters.v6 as v6_mod
 
     importlib.reload(v6_mod)
-    adapter = v6_mod.IsaacAdapterV6()
+    return v6_mod.IsaacAdapterV6()
+
+
+def test_v6_set_joint_positions_calls_set_dof_position_targets(monkeypatch):
+    """V6.set_joint_positions must build an Articulation and forward to set_dof_position_targets."""
+    captured = {}
+    adapter = _v6_adapter_with_fake_articulation(monkeypatch, captured)
+
     adapter.set_joint_positions("/World/Franka", [0.1, 0.2, 0.3])
+
     assert captured["paths"] == ["/World/Franka"]
     assert list(captured["positions"][0]) == [0.1, 0.2, 0.3]
+    assert captured["indices"] is None and captured["dof_indices"] is None
+
+
+def test_v6_set_joint_positions_passes_joint_indices_as_dof_indices(monkeypatch):
+    """joint_indices went to `indices=`, which selects prims, not DOFs.
+
+    The view wraps one articulation, so joint_indices=[3] addressed a fourth
+    robot that does not exist. Measured on 6.0.1-rc.7 PhysX over 6 cold boots:
+    the target was never applied (4 runs) and Kit crashed on the next step
+    (2 runs); the full-vector write was correct in all 6. 5.1, whose
+    ArticulationAction takes joint_indices as DOFs, applied it every time.
+    """
+    captured = {}
+    adapter = _v6_adapter_with_fake_articulation(monkeypatch, captured)
+
+    adapter.set_joint_positions("/World/Franka", [-1.5], joint_indices=[3])
+
+    assert list(captured["dof_indices"]) == [3], "joint_indices must select DOFs"
+    assert captured["indices"] is None, "indices selects prims; the single wrapped robot is index 0"
+    assert list(captured["positions"][0]) == [-1.5]
 
 
 def test_v6_get_simulation_state_includes_engine_and_version(monkeypatch):

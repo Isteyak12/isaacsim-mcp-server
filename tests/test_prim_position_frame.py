@@ -371,6 +371,15 @@ def test_observed_position_never_puts_the_local_pose_under_the_world_name():
     assert fields["position_world_warning"] == warning
 
 
+def test_observed_position_keeps_the_stale_pose_warning():
+    from isaac_sim_mcp_extension.adapters.transforms import observed_position
+
+    stale = "it is the authored USD pose ... so both are stale"
+    fields = observed_position({"position_local": [1, 2, 3], "position_world": [1, 2, 3], "position_warning": stale})
+
+    assert fields == {"position_world": [1, 2, 3], "position_warning": stale}
+
+
 def _state_position_keys(src):
     """Keys assigned as `state[...]` in `step`, for the position field."""
     import ast

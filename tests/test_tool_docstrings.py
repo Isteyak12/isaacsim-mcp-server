@@ -216,17 +216,16 @@ def test_create_physics_scene_docstring_qualifies_the_no_second_floor_claim():
 # Every tool docstring is in the agent's context on EVERY call, so the block of
 # them is a standing cost paid per request, not per use of that tool. Each fix
 # to this server has added a paragraph explaining what went wrong, and the
-# explanations came to outweigh the instructions: 23,350 characters of
-# dedented tool docstrings (~5.8k tokens) before this budget existed, trimmed
-# to 19,730 (~4.9k) by moving rationale out without dropping any contract.
+# explanations came to outweigh the instructions, until they were cut
+# without dropping any contract.
 #
 # That dilutes the lines an agent must actually act on. Rationale belongs in
 # code comments and commit messages, which cost the agent nothing; docstrings
 # carry the contract -- fields returned, ordering rules, actionable limits.
 #
 # The cap is measured on what list_tools() sends, not on the source: before
-# Python 3.13 FastMCP sent the raw, indented __doc__ (23,511 characters on
-# 3.10 against 20,564 dedented), so registration now dedents every docstring.
+# Python 3.13 FastMCP sent the raw, indented __doc__, so registration now
+# dedents every docstring.
 #
 # These are ratchets. Lower them when a docstring gets tighter; raising one is
 # a decision to spend context, and should be argued for in the commit.

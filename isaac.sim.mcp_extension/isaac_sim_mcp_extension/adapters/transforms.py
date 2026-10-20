@@ -210,17 +210,22 @@ def observed_position(transform: Dict[str, Any]) -> Dict[str, Any]:
     The USD fallback in step() used `position_world or position_local`, which
     put the parent-relative pose under the world name exactly when
     read_transform had withheld position_world because it could not be
-    computed. Keep the frame in the key instead, and pass the warning through.
+    computed. Keep the frame in the key instead, and pass the warnings through
+    (position_warning: Newton served the stale USD spawn pose).
     """
     if transform.get("position_world") is not None:
-        return {"position_world": transform["position_world"]}
-    return {
-        "position_local": transform.get("position_local", [0, 0, 0]),
-        "position_world_warning": transform.get(
-            "position_world_warning",
-            "The world position of this prim could not be read; position_local is parent-relative.",
-        ),
-    }
+        fields = {"position_world": transform["position_world"]}
+    else:
+        fields = {
+            "position_local": transform.get("position_local", [0, 0, 0]),
+            "position_world_warning": transform.get(
+                "position_world_warning",
+                "The world position of this prim could not be read; position_local is parent-relative.",
+            ),
+        }
+    if transform.get("position_warning"):
+        fields["position_warning"] = transform["position_warning"]
+    return fields
 
 
 def local_euler_for_world_rotation(stage, prim_path, world_euler):

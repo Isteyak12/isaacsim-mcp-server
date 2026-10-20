@@ -314,67 +314,102 @@ def _adapter_src(filename, func):
     raise AssertionError(f"{func} not found in {filename}")
 
 
-def _unpaired_local_reads(src):
-    """Position reads in `step` that take the local frame on their own.
-
-    `step` reads a position in several places, and each one must ask for
-    position_world first and fall back to position_local only if it is absent.
-    A substring check cannot enforce that: it is satisfied by a single
-    surviving world read while every other site silently reverts to the local
-    frame. Measured — reverting two of the three sites in each adapter left the
-    whole suite green.
-
-    So pair them structurally instead. Every `transform.get("position_local")`
-    must be the right-hand side of `transform.get("position_world") or ...`;
-    anything else is a site reading the parent-relative pose as though it were
-    a measurement.
-    """
+def _local_reads(src):
+    """`transform.get("position_local")` calls written directly in `step`."""
     import ast
 
-    def _reads(node, key):
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "transform"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value == key
-        )
-
-    tree = ast.parse(src)
-    paired = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
-            for left, right in zip(node.values, node.values[1:]):
-                if _reads(left, "position_world") and _reads(right, "position_local"):
-                    paired.add(id(right))
-
-    unpaired = [n for n in ast.walk(tree) if _reads(n, "position_local") and id(n) not in paired]
-    world_reads = [n for n in ast.walk(tree) if _reads(n, "position_world")]
-    return unpaired, world_reads
+    return [
+        n
+        for n in ast.walk(ast.parse(src))
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "get"
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "transform"
+        and n.args
+        and isinstance(n.args[0], ast.Constant)
+        and n.args[0].value == "position_local"
+    ]
 
 
 @pytest.mark.parametrize("filename", ["v5.py", "v6.py"])
-def test_observe_prims_falls_back_to_the_world_frame(filename):
-    """step(observe_prims=) mixed frames in the same field.
+def test_observe_prims_routes_every_usd_fallback_through_observed_position(filename):
+    """step(observe_prims=) labelled the parent-relative pose as world.
 
-    Its primary branch reads PhysX (v5) or the tensor view (v6), both of which
-    report WORLD positions. The USD fallback beneath it reported the
-    parent-relative one, so which frame `position` meant depended on whether the
-    physics read happened to succeed — invisible to the caller, and the field
-    most used for measuring motion.
+    Each USD fallback read `transform.get("position_world") or
+    transform.get("position_local")`. read_transform omits position_world on
+    purpose when the world transform cannot be computed, so that `or` put the
+    local pose under the world name with no warning -- the #39 bug restated.
+    Every fallback now goes through observed_position, which keeps the frame
+    in the key; a direct position_local read in step() is a site that bypasses it.
     """
     src = _adapter_src(filename, "step")
 
-    unpaired, world_reads = _unpaired_local_reads(src)
-
-    assert world_reads, f"{filename}: observe_prims must fall back to the world frame"
-    assert not unpaired, (
-        f"{filename}: {len(unpaired)} position read(s) in step() take position_local without "
-        "preferring position_world — the parent-relative pose reported as though it were measured"
+    assert "observed_position(" in src, f"{filename}: step must build fallback positions with observed_position"
+    assert not _local_reads(src), (
+        f"{filename}: step reads position_local directly — use observed_position so a local pose "
+        "is never reported under the world name"
     )
+
+
+def test_observed_position_reports_world_when_it_is_known():
+    from isaac_sim_mcp_extension.adapters.transforms import observed_position
+
+    fields = observed_position({"position_local": [1, 2, 3], "position_world": [4, 5, 6]})
+
+    assert fields == {"position_world": [4, 5, 6]}
+
+
+def test_observed_position_never_puts_the_local_pose_under_the_world_name():
+    from isaac_sim_mcp_extension.adapters.transforms import observed_position
+
+    warning = "The world transform for this prim could not be computed"
+    fields = observed_position({"position_local": [1, 2, 3], "position_world_warning": warning})
+
+    assert "position_world" not in fields, "a parent-relative pose must not be labelled world"
+    assert fields["position_local"] == [1, 2, 3]
+    assert fields["position_world_warning"] == warning
+
+
+def _state_position_keys(src):
+    """Keys assigned as `state[...]` in `step`, for the position field."""
+    import ast
+
+    keys = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if (
+                isinstance(tgt, ast.Subscript)
+                and isinstance(tgt.value, ast.Name)
+                and tgt.value.id == "state"
+                and isinstance(tgt.slice, ast.Constant)
+                and str(tgt.slice.value).startswith("position")
+            ):
+                keys.append(tgt.slice.value)
+    return keys
+
+
+@pytest.mark.parametrize("filename", ["v5.py", "v6.py"])
+def test_observe_prims_names_the_frame_it_reports(filename):
+    """step(observe_prims=) reported a bare `position` while get_prim_info refused to.
+
+    get_prim_info deliberately has no unqualified `position`, so a caller must
+    choose a frame (#39). observe_prims then handed back exactly that
+    unqualified name — so the two tools taught opposite contracts, and the one
+    an agent uses most to measure motion was the unqualified one. The value is
+    world in every branch, so the field is named for it.
+    """
+    src = _adapter_src(filename, "step")
+
+    keys = _state_position_keys(src)
+
+    assert keys, f"{filename}: step must report an observed position"
+    assert "position" not in keys, (
+        f"{filename}: step reports a bare 'position' — the unqualified name #39 removed from get_prim_info"
+    )
+    assert set(keys) == {"position_world"}, f"{filename}: unexpected position keys {sorted(set(keys))}"
 
 
 @pytest.mark.parametrize("filename", ["v5.py", "v6.py"])

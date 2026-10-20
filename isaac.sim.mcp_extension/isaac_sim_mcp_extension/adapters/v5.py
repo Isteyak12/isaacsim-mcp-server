@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .base import IsaacAdapterBase, collect_prims, drop_stale_bytecode, find_joint_drive
-from .transforms import read_transform, set_transform
+from .transforms import observed_position, read_transform, set_transform
 from .units import gain_units, limit_units, normalize_gain, normalize_limit
 
 if TYPE_CHECKING:
@@ -1310,25 +1310,17 @@ class IsaacAdapterV5(IsaacAdapterBase):
                         rb_data = physx.get_rigidbody_transformation(path)
                         if rb_data and rb_data.get("ret_val", False):
                             pos = rb_data["position"]
-                            state["position"] = [float(pos[0]), float(pos[1]), float(pos[2])]
+                            state["position_world"] = [float(pos[0]), float(pos[1]), float(pos[2])]
                         else:
-                            transform = self.get_prim_transform(path)
-                            state["position"] = transform.get("position_world") or transform.get(
-                                "position_local", [0, 0, 0]
-                            )
+                            state.update(observed_position(self.get_prim_transform(path)))
                     except Exception:
-                        transform = self.get_prim_transform(path)
-                        state["position"] = transform.get("position_world") or transform.get(
-                            "position_local", [0, 0, 0]
-                        )
+                        state.update(observed_position(self.get_prim_transform(path)))
                 else:
-                    transform = self.get_prim_transform(path)
                     # World, to match the physics branch above: PhysX and the
-                    # tensor view both report world positions, so falling back
-                    # to the parent-relative one silently changed the frame of
-                    # this field depending on whether the physics read
-                    # succeeded -- in the field most used to measure motion.
-                    state["position"] = transform.get("position_world") or transform.get("position_local", [0, 0, 0])
+                    # tensor view both report world positions. When USD cannot
+                    # give the world pose, observed_position reports the local
+                    # one under its own name -- never under position_world.
+                    state.update(observed_position(self.get_prim_transform(path)))
                 # Add velocity if rigid body
                 if prim.HasAPI(UsdPhysics.RigidBodyAPI):
                     try:

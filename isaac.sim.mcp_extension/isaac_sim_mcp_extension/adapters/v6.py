@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .base import IsaacAdapterBase, collect_prims, drop_stale_bytecode, find_joint_drive, spherical_to_cartesian
-from .transforms import read_transform, set_transform
+from .transforms import observed_position, read_transform, set_transform
 from .units import gain_units, limit_units, normalize_gain, normalize_limit
 from .version import version_string
 
@@ -1867,25 +1867,19 @@ class IsaacAdapterV6(IsaacAdapterBase):
                             arr = transforms.numpy() if hasattr(transforms, "numpy") else np.asarray(transforms)
                             if arr.size >= 3:
                                 flat = arr.reshape(-1)
-                                state["position"] = [float(flat[0]), float(flat[1]), float(flat[2])]
+                                state["position_world"] = [float(flat[0]), float(flat[1]), float(flat[2])]
+                            else:
+                                state.update(observed_position(self.get_prim_transform(path)))
                         else:
-                            transform = self.get_prim_transform(path)
-                            state["position"] = transform.get("position_world") or transform.get(
-                                "position_local", [0, 0, 0]
-                            )
+                            state.update(observed_position(self.get_prim_transform(path)))
                     except Exception:
-                        transform = self.get_prim_transform(path)
-                        state["position"] = transform.get("position_world") or transform.get(
-                            "position_local", [0, 0, 0]
-                        )
+                        state.update(observed_position(self.get_prim_transform(path)))
                 else:
-                    transform = self.get_prim_transform(path)
                     # World, to match the physics branch above: PhysX and the
-                    # tensor view both report world positions, so falling back
-                    # to the parent-relative one silently changed the frame of
-                    # this field depending on whether the physics read
-                    # succeeded -- in the field most used to measure motion.
-                    state["position"] = transform.get("position_world") or transform.get("position_local", [0, 0, 0])
+                    # tensor view both report world positions. When USD cannot
+                    # give the world pose, observed_position reports the local
+                    # one under its own name -- never under position_world.
+                    state.update(observed_position(self.get_prim_transform(path)))
                 if prim.HasAPI(UsdPhysics.RigidBodyAPI):
                     try:
                         ps = self.get_physics_state(path)

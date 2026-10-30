@@ -80,6 +80,13 @@ def _encode_jpeg(frame) -> bytes:
     return buf.getvalue()
 
 
+def _finite_number(cmd, key, default):
+    value = cmd.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{key} must be a finite number")
+    return float(value)
+
+
 class LiveView:
     def __init__(self, server, endpoint):
         self.server = server
@@ -140,13 +147,18 @@ class LiveView:
         self.pending_cam = True
 
     def apply_camera(self, cmd):
-        """Apply a POST /camera command."""
+        """Apply a POST /camera command. Nothing changes unless all of it is valid."""
+        if not isinstance(cmd, dict):
+            raise ValueError("expected a JSON object")
+        orbit = _finite_number(cmd, "orbit", 0)
+        tilt = _finite_number(cmd, "tilt", 0)
+        zoom = _finite_number(cmd, "zoom", 1)
         if cmd.get("reset"):
             self.target, self.orbit = list(DEFAULT_TARGET), dict(DEFAULT_ORBIT)
         o = self.orbit
-        o["yaw"] += float(cmd.get("orbit", 0))
-        o["pitch"] = max(-5.0, min(85.0, o["pitch"] + float(cmd.get("tilt", 0))))
-        o["dist"] = max(0.3, min(30.0, o["dist"] * float(cmd.get("zoom", 1))))
+        o["yaw"] = (o["yaw"] + orbit) % 360.0
+        o["pitch"] = max(-5.0, min(85.0, o["pitch"] + tilt))
+        o["dist"] = max(0.3, min(30.0, o["dist"] * zoom))
         self.pending_cam = True
 
     def publish_frame(self, frame):
@@ -276,7 +288,7 @@ p{color:#9aa3ad;font-size:13px}</style>
 <p>Prompt your MCP client (Claude Code, Cursor, ...); the result shows up here.</p></main>
 <script>const q=location.search,v=document.getElementById('v');
 function connect(){v.src='stream'+q+(q?'&':'?')+'t='+Date.now()}v.onerror=()=>setTimeout(connect,3000);connect();
-document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>fetch('camera'+q,{method:'POST',body:b.dataset.c}));
+document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>fetch('camera'+q,{method:'POST',headers:{'Content-Type':'application/json'},body:b.dataset.c}));
 setInterval(()=>fetch('status'+q).then(r=>r.json()).then(j=>{document.getElementById('s').textContent=
 `${j.timeline} \\u00b7 t = ${j.sim_time.toFixed(1)} s \\u00b7 ${j.fps.toFixed(0)} fps \\u00b7 /World: ${j.prims.join(', ')||'empty'}`})
 .catch(()=>{document.getElementById('s').textContent='Isaac Sim not reachable (restarting?)'}),1000);</script></html>"""
@@ -321,7 +333,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, "text/plain", b"not found")
         try:
             n = int(self.headers.get("Content-Length") or 0)
-            self.server.view.apply_camera(json.loads(self.rfile.read(n) or b"{}"))
+            body = self.rfile.read(n)
+            # A page on another site can only reach this without a CORS preflight, which this
+            # server does not answer, by sending a non-JSON content type. Compared to checking
+            # Origin against Host, this also keeps working behind a proxy that rewrites Host.
+            if self.headers.get_content_type() != "application/json":
+                return self._send(415, "application/json", b'{"error": "expected application/json"}')
+            self.server.view.apply_camera(json.loads(body or b"{}"))
             self._send(200, "application/json", b'{"ok": true}')
         except Exception as e:
             self._send(400, "application/json", json.dumps({"error": str(e)}).encode())

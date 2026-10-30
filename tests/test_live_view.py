@@ -141,6 +141,74 @@ def test_restart_without_a_running_view_starts_nothing(app):
     assert live_view.restart() is None
 
 
+# ── POST /camera ───────────────────────────────────────────────────────────────
+
+
+def post_camera(port: int, body: bytes, content_type="application/json") -> int:
+    conn = http.client.HTTPConnection(HOST, port, timeout=3)
+    headers = {"Content-Type": content_type} if content_type else {}
+    conn.request("POST", "/camera", body=body, headers=headers)
+    return conn.getresponse().status
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"orbit": "nan"}',
+        b'{"orbit": NaN}',
+        b'{"tilt": Infinity}',
+        b'{"zoom": -Infinity}',
+        b'{"zoom": "1.25"}',
+        b'{"orbit": true}',
+        b'{"orbit": 20, "tilt": NaN}',
+        b"[1]",
+        b"not json",
+    ],
+)
+def test_camera_rejects_bad_input_and_leaves_the_camera_alone(app, body):
+    port = free_port()
+    view = live_view.start(port, HOST)
+    before = dict(view.orbit)
+    assert post_camera(port, body) == 400
+    assert view.orbit == before
+
+
+def test_camera_applies_a_valid_orbit(app):
+    port = free_port()
+    view = live_view.start(port, HOST)
+    assert post_camera(port, b'{"orbit": 20}') == 200
+    assert view.orbit["yaw"] == 345.0  # default -35 + 20, wrapped to [0, 360)
+
+
+def test_camera_orbit_cannot_overflow_to_infinity(app):
+    port = free_port()
+    view = live_view.start(port, HOST)
+    for _ in range(2):
+        assert post_camera(port, b'{"orbit": 1e308}') == 200
+    assert view.orbit["yaw"] < 360.0
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "application/x-www-form-urlencoded", None])
+def test_camera_refuses_what_a_foreign_page_can_send_without_preflight(app, content_type):
+    """A cross-site fetch can only skip CORS preflight with these content types."""
+    port = free_port()
+    view = live_view.start(port, HOST)
+    before = dict(view.orbit)
+    assert post_camera(port, b'{"orbit": 20}', content_type) == 415
+    assert view.orbit == before
+
+
+def test_camera_accepts_json_with_a_charset(app):
+    port = free_port()
+    live_view.start(port, HOST)
+    assert post_camera(port, b'{"orbit": 20}', "application/json; charset=utf-8") == 200
+
+
+def test_page_buttons_send_the_content_type_the_server_requires(app):
+    # No browser in the unit suite. Without this header every button gets a 415.
+    assert b"'Content-Type':'application/json'" in live_view.PAGE
+
+
 # ── /stream ────────────────────────────────────────────────────────────────────
 
 

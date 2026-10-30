@@ -522,6 +522,8 @@ simulation in a browser while you prompt your IDE:
 # or: ISAAC_LIVE_VIEW=1 ./scripts/run_isaac_sim.sh --no-window
 ```
 
+On Windows, `.\scripts\run_isaac_sim.ps1 --no-window --live-view` does the same.
+
 Isaac Sim then serves a page on `http://127.0.0.1:18200/` with the camera feed (MJPEG), the
 timeline state, and orbit/tilt/zoom buttons. It renders whether the simulation is playing or
 stopped, so scene edits appear as soon as a tool call finishes.
@@ -529,14 +531,17 @@ stopped, so scene edits appear as soon as a tool call finishes.
 - **Remote access:** it listens on localhost only. From your own computer, tunnel to it with
   `ssh -L 18200:127.0.0.1:18200 user@gpu-host` and open `http://localhost:18200/`, or put it
   behind a reverse proxy that does authentication. The page has no authentication of its own.
-- **Port:** set `ISAAC_LIVE_VIEW_PORT` (and `ISAAC_LIVE_VIEW_HOST` to bind elsewhere).
+- **Port:** the default follows the MCP port (8766 serves 18200, 8767 serves 18201), so instances
+  on different MCP ports do not collide. Set `ISAAC_LIVE_VIEW_PORT` to choose one, and
+  `ISAAC_LIVE_VIEW_HOST` to bind elsewhere. If the port is taken, Isaac Sim still starts, without
+  the live view, and logs an error naming the port.
 - **Camera:** it renders `/OmniverseKit_Persp`, which survives `clear_scene`. To aim it from a
   prompt, `execute_script` with
-  `import builtins; builtins._live_view["look_at"]([2.5, -1.5, 1.4], [0.4, 0.0, 0.4])`.
+  `from isaac_sim_mcp_extension import live_view; live_view.look_at([2.5, -1.5, 1.4], [0.4, 0.0, 0.4])`.
 - **Already running Isaac Sim?** Start it without a restart through `execute_script`:
-  `exec(open("/path/to/isaacsim-mcp-server/scripts/live_view.py").read())`.
-- **Limits:** watch-only video (not an interactive viewport), about 30–40 fps on an RTX 4090,
-  and the flag is Linux-only for now.
+  `from isaac_sim_mcp_extension import live_view; live_view.start(18200)`. `live_view.stop()` turns
+  it off again.
+- **Limits:** watch-only video (not an interactive viewport), about 30–40 fps on an RTX 4090.
 
 ### Recommended Workflow
 

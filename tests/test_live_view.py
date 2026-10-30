@@ -33,6 +33,7 @@ from __future__ import annotations
 import http.client
 import socket
 import sys
+import threading
 import types
 
 import pytest
@@ -210,6 +211,41 @@ def test_page_buttons_send_the_content_type_the_server_requires(app):
 
 
 # ── /stream ────────────────────────────────────────────────────────────────────
+
+
+def read_first_jpeg(port: int, out: list) -> None:
+    conn = http.client.HTTPConnection(HOST, port, timeout=5)
+    conn.request("GET", "/stream")
+    data = b""
+    resp = conn.getresponse()
+    while b"JPEGBYTES" not in data:
+        data += resp.read1(4096)
+    out.append(data)
+    conn.close()
+
+
+def test_two_stream_clients_share_one_encode_per_frame(app, monkeypatch):
+    """Each client encoding for itself cost 5.1 about 36% step speed at 4 clients."""
+    encodes = []
+
+    def fake_encode(frame):
+        encodes.append(frame)
+        return b"JPEGBYTES"
+
+    monkeypatch.setattr(live_view, "_encode_jpeg", fake_encode)
+    port = free_port()
+    view = live_view.start(port, HOST)
+    view.publish_frame("frame-1")
+
+    received: list = []
+    clients = [threading.Thread(target=read_first_jpeg, args=(port, received)) for _ in range(2)]
+    for c in clients:
+        c.start()
+    for c in clients:
+        c.join(timeout=5)
+
+    assert len(received) == 2
+    assert encodes == ["frame-1"]
 
 
 def test_stop_ends_a_stream_waiting_for_its_next_frame(app, monkeypatch):

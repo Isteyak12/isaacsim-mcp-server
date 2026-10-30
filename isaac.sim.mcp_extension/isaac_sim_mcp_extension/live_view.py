@@ -110,6 +110,9 @@ class LiveView:
         self._fps_t = time.time()
         self._fps_n = 0
         self._frame_ready = threading.Condition()
+        self._encode_lock = threading.Lock()
+        self._jpeg = None
+        self._jpeg_id = 0
 
     def start(self):
         self.server.view = self
@@ -167,14 +170,24 @@ class LiveView:
             self.frame_id += 1
             self._frame_ready.notify_all()
 
-    def next_frame(self, last_id):
-        """Block until a frame newer than `last_id`, and return (frame, id); (None, id) once stopped."""
+    def next_jpeg(self, last_id):
+        """Block until a frame newer than `last_id`, and return (jpeg, id); (None, id) once stopped.
+
+        Clients share one encode per frame. Encoding runs on the HTTP threads and holds the GIL
+        against Kit's main thread: on 5.1, where a step renders a frame, four clients encoding
+        separately slowed step_simulation by about 36%. Encoding happens outside _frame_ready so
+        publish_frame on the main thread never waits for it.
+        """
         with self._frame_ready:
             while self.running and (self.frame is None or self.frame_id == last_id):
                 self._frame_ready.wait(0.5)
             if not self.running:
                 return None, last_id
-            return self.frame, self.frame_id
+            frame, frame_id = self.frame, self.frame_id
+        with self._encode_lock:
+            if self._jpeg_id < frame_id:
+                self._jpeg, self._jpeg_id = _encode_jpeg(frame), frame_id
+            return self._jpeg, self._jpeg_id
 
     def _release_render_product(self):
         try:
@@ -317,10 +330,9 @@ class Handler(BaseHTTPRequestHandler):
             last = 0
             try:
                 while True:
-                    frame, last = view.next_frame(last)
-                    if frame is None:
+                    jpg, last = view.next_jpeg(last)
+                    if jpg is None:
                         break
-                    jpg = _encode_jpeg(frame)
                     self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(jpg))
                     self.wfile.write(jpg + b"\r\n")
             except (BrokenPipeError, ConnectionResetError):
